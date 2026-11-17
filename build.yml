@@ -1,0 +1,232 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Numéro de version (ex. V2.0.1). Laisser vide = version automatique (fichier version.txt)"
+        required: false
+        default: ""
+  push:
+    branches: [main, master]
+    paths-ignore: [version.txt, annonce.json, archives.json, "archives/**", README.md]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vérifier les fichiers du projet
+        run: |
+          ERR=0
+          [ -f package.json ] || { echo "::error::Fichier manquant à la racine : package.json"; ERR=1; }
+          [ -f capacitor.config.json ] || { echo "::error::Fichier manquant à la racine : capacitor.config.json"; ERR=1; }
+          if [ ! -f www/index.html ]; then
+            if [ -f index.html ]; then
+              mkdir -p www
+              cp index.html www/index.html
+              echo "index.html trouvé à la racine : copié dans www/"
+            else
+              echo "::error::index.html introuvable (attendu : www/index.html ou index.html à la racine)"
+              ERR=1
+            fi
+          fi
+          if [ ! -f signing/debug.keystore.enc ] && [ ! -f signing-key.b64 ]; then
+            echo "::error::Clé de signature absente (attendu : signing-key.b64 à la racine ou signing/debug.keystore.enc)"
+            ERR=1
+          fi
+          [ "$ERR" = "0" ] || exit 1
+
+      - name: Déterminer la version
+        id: ver
+        env:
+          INPUT_V: ${{ github.event.inputs.version }}
+        run: |
+          V="$INPUT_V"
+          if [ -z "$V" ]; then
+            if [ -f version.txt ]; then V=$(tr -d ' \r\n' < version.txt); else V="V2.0.0"; fi
+          fi
+          if ! echo "$V" | grep -Eq '^V[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Numéro de version invalide ($V). Format attendu : V2.0.1 (vérifiez version.txt)"
+            exit 1
+          fi
+          IFS=. read -r MA MI PA <<< "${V#V}"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "code=$((MA*10000+MI*100+PA))" >> "$GITHUB_OUTPUT"
+          echo "next=V${MA}.${MI}.$((PA+1))" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Installer les dépendances
+        run: npm install
+
+      - name: Préparer l'application hors ligne (bibliothèques PDF)
+        run: |
+          mkdir -p www/libs
+          cp node_modules/jspdf/dist/jspdf.umd.min.js node_modules/jspdf-autotable/dist/jspdf.plugin.autotable.min.js node_modules/html2canvas/dist/html2canvas.min.js node_modules/pdfjs-dist/build/pdf.min.js node_modules/pdfjs-dist/build/pdf.worker.min.js www/libs/
+          sed -i 's#https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js#libs/jspdf.umd.min.js#; s#https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js#libs/jspdf.plugin.autotable.min.js#; s#https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js#libs/html2canvas.min.js#; s#https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js#libs/pdf.min.js#' www/index.html
+          grep -q 'config.js' www/index.html || sed -i 's#</head>#<script src="config.js"></script></head>#' www/index.html
+          grep -c 'cdnjs' www/index.html || true
+
+      - name: Écrire la configuration de l'application
+        run: |
+          printf 'window.APP_CFG={version:"%s",repo:"%s",branch:"%s",annonce:"https://raw.githubusercontent.com/%s/%s/annonce.json",archives:"https://raw.githubusercontent.com/%s/%s/archives.json",release:"https://github.com/%s/releases/latest"};\n' \
+            "${{ steps.ver.outputs.version }}" "${{ github.repository }}" "${{ github.ref_name }}" \
+            "${{ github.repository }}" "${{ github.ref_name }}" "${{ github.repository }}" "${{ github.ref_name }}" "${{ github.repository }}" > www/config.js
+          cat www/config.js
+
+      - name: Créer le fichier HTML autonome (hors ligne total)
+        env:
+          OUT: Bulletins-et-Notes-${{ steps.ver.outputs.version }}-hors-ligne.html
+        run: |
+          python3 - <<'PY'
+          import re, os, json
+          s = open('www/index.html', encoding='utf-8').read()
+          def esc(t):
+              return t.replace('</script', '<\\/script').replace('<!--', '<\\!--')
+          def rep(m):
+              p = 'www/' + m.group(1)
+              if os.path.exists(p):
+                  return '<script>' + esc(open(p, encoding='utf-8').read()) + '</script>'
+              return m.group(0)
+          s = re.sub(r'<script src="([^"]+\.js)"></script>', rep, s)
+          w = json.dumps(open('www/libs/pdf.worker.min.js', encoding='utf-8').read())
+          s = s.replace('</head>', '<script>window.PDFW_TXT=' + esc(w) + ';</script></head>', 1)
+          open(os.environ['OUT'], 'w', encoding='utf-8').write(s)
+          print('fichier autonome :', os.path.getsize(os.environ['OUT']), 'octets')
+          PY
+
+      - name: Clé de signature fixe (mises à jour sans désinstaller)
+        env:
+          SIGNING_PASSPHRASE: ${{ secrets.SIGNING_PASSPHRASE }}
+        run: |
+          if [ -z "$SIGNING_PASSPHRASE" ]; then
+            echo "::error::Secret SIGNING_PASSPHRASE manquant (Settings > Secrets and variables > Actions > New repository secret)."
+            exit 1
+          fi
+          if [ -f signing-key.b64 ]; then base64 -d signing-key.b64 > /tmp/key.enc; else cp signing/debug.keystore.enc /tmp/key.enc; fi
+          mkdir -p ~/.android
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in /tmp/key.enc -out ~/.android/debug.keystore -pass env:SIGNING_PASSPHRASE || { echo "::error::Phrase secrète incorrecte ou fichier de clé illisible."; exit 1; }
+
+      - name: Ajouter la plateforme Android
+        run: npx cap add android
+
+      - name: Générer les icônes Android
+        run: |
+          if [ -f resources/icon-only.png ]; then
+            npx capacitor-assets generate --android
+          else
+            echo "::warning::Dossier resources absent : icône Android par défaut."
+          fi
+
+      - name: Synchroniser
+        run: npx cap sync android
+
+      - name: Numéro de version Android
+        run: |
+          sed -i "s/versionCode 1/versionCode ${{ steps.ver.outputs.code }}/; s/versionName \"1.0\"/versionName \"${{ steps.ver.outputs.version }}\"/" android/app/build.gradle
+          grep -n "version" android/app/build.gradle | head
+
+      - name: Compiler l'APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Préparer les fichiers à publier
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "Bulletins-et-Notes-$V.apk"
+          zip -qr "Bulletins-et-Notes-$V-projet.zip" . -x "node_modules/*" "android/*" ".git/*" "*.apk" "*.zip" "*-hors-ligne.html"
+
+      - name: Conserver l'APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bulletins-et-Notes-${{ steps.ver.outputs.version }}
+          path: Bulletins-et-Notes-${{ steps.ver.outputs.version }}.apk
+
+      - name: Publier la version (liens de téléchargement)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          name: Bulletins et Notes ${{ steps.ver.outputs.version }}
+          make_latest: true
+          files: |
+            Bulletins-et-Notes-${{ steps.ver.outputs.version }}.apk
+            Bulletins-et-Notes-${{ steps.ver.outputs.version }}-projet.zip
+            Bulletins-et-Notes-${{ steps.ver.outputs.version }}-hors-ligne.html
+
+      - name: Préparer la version suivante
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          echo "${{ steps.ver.outputs.next }}" > version.txt
+          git add version.txt
+          git commit -m "Prochaine version ${{ steps.ver.outputs.next }}" || true
+          git push || true
+
+  pages:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.dep.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Préparer le site (application installable, hors ligne)
+        run: |
+          if [ ! -f www/index.html ]; then
+            [ -f index.html ] || { echo "::error::index.html introuvable"; exit 1; }
+            mkdir -p www
+            cp index.html www/index.html
+          fi
+          V="V2.0.0"
+          if [ -f version.txt ]; then V=$(tr -d ' \r\n' < version.txt); fi
+          npm install --ignore-scripts --no-audit --no-fund
+          mkdir -p www/libs
+          cp node_modules/jspdf/dist/jspdf.umd.min.js node_modules/jspdf-autotable/dist/jspdf.plugin.autotable.min.js node_modules/html2canvas/dist/html2canvas.min.js node_modules/pdfjs-dist/build/pdf.min.js node_modules/pdfjs-dist/build/pdf.worker.min.js www/libs/
+          sed -i 's#https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js#libs/jspdf.umd.min.js#; s#https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js#libs/jspdf.plugin.autotable.min.js#; s#https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js#libs/html2canvas.min.js#; s#https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js#libs/pdf.min.js#' www/index.html
+          grep -q 'config.js' www/index.html || sed -i 's#</head>#<script src="config.js"></script></head>#' www/index.html
+          printf 'window.APP_CFG={version:"%s",repo:"%s",branch:"%s",annonce:"https://raw.githubusercontent.com/%s/%s/annonce.json",archives:"https://raw.githubusercontent.com/%s/%s/archives.json",release:"https://github.com/%s/releases/latest"};\n' \
+            "$V" "${{ github.repository }}" "${{ github.ref_name }}" \
+            "${{ github.repository }}" "${{ github.ref_name }}" "${{ github.repository }}" "${{ github.ref_name }}" "${{ github.repository }}" > www/config.js
+          if [ -f resources/icon-only.png ]; then
+            convert resources/icon-only.png -resize 192x192 www/icon-192.png
+            convert resources/icon-only.png -resize 512x512 www/icon-512.png
+          else
+            grep -o 'data:image/png;base64,[A-Za-z0-9+/=]*' www/index.html | head -1 | cut -d, -f2 | base64 -d > www/icon-192.png
+            cp www/icon-192.png www/icon-512.png
+          fi
+          printf '{"name":"Bulletins et Notes","short_name":"Bulletins","start_url":"./","scope":"./","display":"standalone","background_color":"#0b6b3a","theme_color":"#0b6b3a","icons":[{"src":"icon-192.png","sizes":"192x192","type":"image/png"},{"src":"icon-512.png","sizes":"512x512","type":"image/png"}]}\n' > www/manifest.webmanifest
+          sed -i 's#</head>#<link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="\#0b6b3a"></head>#; s#</body>#<script>if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js")</script></body>#' www/index.html
+          LIST=$(cd www && find . -type f ! -name sw.js | sed 's#^\./##' | sed 's#.*#"&"#' | paste -sd, -)
+          echo "const C=\"bn-${{ github.run_number }}\",A=[\"./\",$LIST];" > www/sw.js
+          cat >> www/sw.js <<'EOF'
+          self.addEventListener("install",e=>e.waitUntil(caches.open(C).then(c=>c.addAll(A)).then(()=>self.skipWaiting())));
+          self.addEventListener("activate",e=>e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x!=C).map(x=>caches.delete(x)))).then(()=>clients.claim())));
+          self.addEventListener("fetch",e=>{if(e.request.method!="GET")return;if(new URL(e.request.url).origin!=location.origin)return;e.respondWith(caches.match(e.request,{ignoreSearch:true}).then(r=>r||fetch(e.request).then(x=>{const y=x.clone();caches.open(C).then(c=>c.put(e.request,y));return x}).catch(()=>caches.match("index.html"))))});
+          EOF
+          touch www/.nojekyll
+          head -c 400 www/sw.js; echo
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: www
+      - id: dep
+        uses: actions/deploy-pages@v4
