@@ -51,7 +51,7 @@ jobs:
           [ -f capacitor.config.json ] || cat > capacitor.config.json <<'EOF'
           {
             "appId": "com.toto.bulletins",
-            "appName": "Bulletins et Notes",
+            "appName": "SMART BNEPP",
             "webDir": "www"
           }
           EOF
@@ -104,7 +104,7 @@ jobs:
 
       - name: Créer le fichier HTML autonome (hors ligne total)
         env:
-          OUT: Bulletins-et-Notes-${{ steps.ver.outputs.version }}-hors-ligne.html
+          OUT: SMART-BNEPP-${{ steps.ver.outputs.version }}-hors-ligne.html
         run: |
           python3 - <<'PY'
           import re, os, json
@@ -192,12 +192,68 @@ jobs:
       - name: Ajouter la plateforme Android
         run: npx cap add android
 
+      - name: Plugin d'impression Android (aperçu et impression directe)
+        run: |
+          APPID=$(grep -o '"appId" *: *"[^"]*"' capacitor.config.json | sed 's/.*: *"\(.*\)"/\1/')
+          DIR="android/app/src/main/java/$(echo "$APPID" | tr . /)"
+          mkdir -p "$DIR"
+          cat > "$DIR/PrintPlugin.java" <<EOF
+          package $APPID;
+
+          import android.content.Context;
+          import android.print.PrintAttributes;
+          import android.print.PrintDocumentAdapter;
+          import android.print.PrintManager;
+          import android.webkit.WebView;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+
+          @CapacitorPlugin(name = "AppPrint")
+          public class PrintPlugin extends Plugin {
+              @PluginMethod
+              public void print(final PluginCall call) {
+                  final String name = call.getString("name", "Document");
+                  getActivity().runOnUiThread(new Runnable() {
+                      @Override
+                      public void run() {
+                          try {
+                              PrintManager pm = (PrintManager) getActivity().getSystemService(Context.PRINT_SERVICE);
+                              WebView wv = getBridge().getWebView();
+                              PrintDocumentAdapter adapter = wv.createPrintDocumentAdapter(name);
+                              pm.print(name, adapter, new PrintAttributes.Builder().build());
+                              call.resolve();
+                          } catch (Exception e) {
+                              call.reject(String.valueOf(e.getMessage()));
+                          }
+                      }
+                  });
+              }
+          }
+          EOF
+          cat > "$DIR/MainActivity.java" <<EOF
+          package $APPID;
+
+          import android.os.Bundle;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  registerPlugin(PrintPlugin.class);
+                  super.onCreate(savedInstanceState);
+              }
+          }
+          EOF
+          ls -la "$DIR"
+
       - name: Icône de l'application
         run: |
           set +e
           if [ ! -f resources/icon-only.png ]; then
             mkdir -p resources
-            grep -o 'data:image/png;base64,[A-Za-z0-9+/=]*' www/index.html | head -1 | cut -d, -f2 | base64 -d > /tmp/fav.png
+            grep -o 'rel="apple-touch-icon"[^>]*base64,[A-Za-z0-9+/=]*' www/index.html | head -1 | sed 's/.*base64,//' | base64 -d > /tmp/fav.png
             convert /tmp/fav.png -resize 1024x1024 resources/icon-only.png
             convert /tmp/fav.png -resize 680x680 -background none -gravity center -extent 1024x1024 resources/icon-foreground.png
             convert -size 1024x1024 xc:'#0a2a6b' resources/icon-background.png
@@ -222,25 +278,25 @@ jobs:
       - name: Préparer les fichiers à publier
         run: |
           V="${{ steps.ver.outputs.version }}"
-          cp android/app/build/outputs/apk/debug/app-debug.apk "Bulletins-et-Notes-$V.apk"
-          zip -qr "Bulletins-et-Notes-$V-projet.zip" . -x "node_modules/*" "android/*" ".git/*" "*.apk" "*.zip" "*-hors-ligne.html"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "SMART-BNEPP-$V.apk"
+          zip -qr "SMART-BNEPP-$V-projet.zip" . -x "node_modules/*" "android/*" ".git/*" "*.apk" "*.zip" "*-hors-ligne.html"
 
       - name: Conserver l'APK
         uses: actions/upload-artifact@v4
         with:
-          name: Bulletins-et-Notes-${{ steps.ver.outputs.version }}
-          path: Bulletins-et-Notes-${{ steps.ver.outputs.version }}.apk
+          name: SMART-BNEPP-${{ steps.ver.outputs.version }}
+          path: SMART-BNEPP-${{ steps.ver.outputs.version }}.apk
 
       - name: Publier la version (liens de téléchargement)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.version }}
-          name: Bulletins et Notes ${{ steps.ver.outputs.version }}
+          name: SMART BNEPP ${{ steps.ver.outputs.version }}
           make_latest: true
           files: |
-            Bulletins-et-Notes-${{ steps.ver.outputs.version }}.apk
-            Bulletins-et-Notes-${{ steps.ver.outputs.version }}-projet.zip
-            Bulletins-et-Notes-${{ steps.ver.outputs.version }}-hors-ligne.html
+            SMART-BNEPP-${{ steps.ver.outputs.version }}.apk
+            SMART-BNEPP-${{ steps.ver.outputs.version }}-projet.zip
+            SMART-BNEPP-${{ steps.ver.outputs.version }}-hors-ligne.html
 
       - name: Préparer la version suivante
         run: |
@@ -308,7 +364,7 @@ jobs:
           [ -f capacitor.config.json ] || cat > capacitor.config.json <<'EOF'
           {
             "appId": "com.toto.bulletins",
-            "appName": "Bulletins et Notes",
+            "appName": "SMART BNEPP",
             "webDir": "www"
           }
           EOF
@@ -326,9 +382,9 @@ jobs:
           printf 'window.APP_CFG={version:"%s",repo:"%s",branch:"%s",annonce:"https://raw.githubusercontent.com/%s/%s/annonce.json",archives:"https://raw.githubusercontent.com/%s/%s/archives.json",release:"https://github.com/%s/releases/latest"};\n' \
             "$V" "${{ github.repository }}" "${{ github.ref_name }}" \
             "${{ github.repository }}" "${{ github.ref_name }}" "${{ github.repository }}" "${{ github.ref_name }}" "${{ github.repository }}" > www/config.js
-          grep -o 'data:image/png;base64,[A-Za-z0-9+/=]*' www/index.html | head -1 | cut -d, -f2 | base64 -d > www/icon-192.png
-          cp www/icon-192.png www/icon-512.png
-          printf '{"name":"Bulletins et Notes","short_name":"Bulletins","start_url":"./","scope":"./","display":"standalone","background_color":"#0b6b3a","theme_color":"#0b6b3a","icons":[{"src":"icon-192.png","sizes":"192x192","type":"image/png"},{"src":"icon-512.png","sizes":"512x512","type":"image/png"}]}\n' > www/manifest.webmanifest
+          grep -o 'rel="apple-touch-icon"[^>]*base64,[A-Za-z0-9+/=]*' www/index.html | head -1 | sed 's/.*base64,//' | base64 -d > www/icon-512.png
+          convert www/icon-512.png -resize 192x192 www/icon-192.png || cp www/icon-512.png www/icon-192.png
+          printf '{"name":"SMART BNEPP","short_name":"BNEPP","start_url":"./","scope":"./","display":"standalone","background_color":"#0b6b3a","theme_color":"#0b6b3a","icons":[{"src":"icon-192.png","sizes":"192x192","type":"image/png"},{"src":"icon-512.png","sizes":"512x512","type":"image/png"}]}\n' > www/manifest.webmanifest
           sed -i 's#</head>#<link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="\#0b6b3a"></head>#; s#</body>#<script>if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js")</script></body>#' www/index.html
           LIST=$(cd www && find . -type f ! -name sw.js | sed 's#^\./##' | sed 's#.*#"&"#' | paste -sd, -)
           echo "const C=\"bn-${{ github.run_number }}\",A=[\"./\",$LIST];" > www/sw.js
