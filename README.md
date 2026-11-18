@@ -1,4 +1,4 @@
-# Bulletins et Notes — projet
+# SMART BNEPP — Bulletins de Notes des Enseignants du Préscolaire et du Primaire
 
 ## Minimum nécessaire
 Le dépôt n'a besoin que de `index.html` (racine) et `.github/workflows/build.yml` : le build crée lui-même `package.json`, `capacitor.config.json`, l'icône et embarque la clé de signature. Les autres fichiers du zip sont facultatifs.
@@ -19,3 +19,6 @@ Le dépôt n'a besoin que de `index.html` (racine) et `.github/workflows/build.y
 - **Fichier « -hors-ligne.html »** (dans Releases) : application en un seul fichier, entièrement autonome ; ouvrez-le dans Chrome, même sans Internet.
 - **Site GitHub Pages** (facultatif) : Settings > Pages > Source : « GitHub Actions ». Le site s'installe comme une application (menu Chrome > Installer) et fonctionne ensuite hors ligne.
 - Seuls l'envoi WhatsApp/e-mail, la réception des annonces/catalogue et la publication GitHub demandent du réseau.
+
+## Impression
+Boutons « 👁 Aperçu », « 🖨 Imprimer » et « ⬇ PDF » sur la feuille d'évaluation, la moyenne annuelle et les bulletins. Dans l'APK, « Imprimer » ouvre l'aperçu d'impression d'Android (choix de l'imprimante ou « Enregistrer au format PDF »). Si l'export PDF échoue, l'impression s'ouvre automatiquement.
