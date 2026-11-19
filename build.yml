@@ -28,8 +28,7 @@ jobs:
             "version": "1.0.0",
             "private": true,
             "scripts": {
-              "libs": "node scripts/copy-libs.js",
-              "icons": "capacitor-assets generate --android"
+              "libs": "node scripts/copy-libs.js"
             },
             "dependencies": {
               "@capacitor/android": "^6.2.0",
@@ -42,9 +41,6 @@ jobs:
               "jspdf-autotable": "3.8.2",
               "@capacitor/browser": "^6.0.3",
               "pdfjs-dist": "3.11.174"
-            },
-            "devDependencies": {
-              "@capacitor/assets": "^3.0.5"
             }
           }
           EOF
@@ -248,18 +244,27 @@ jobs:
           EOF
           ls -la "$DIR"
 
-      - name: Icône de l'application
+      - name: Icône de l'application (logo SMART BNEPP)
         run: |
-          set +e
-          if [ ! -f resources/icon-only.png ]; then
-            mkdir -p resources
-            grep -o 'rel="apple-touch-icon"[^>]*base64,[A-Za-z0-9+/=]*' www/index.html | head -1 | sed 's/.*base64,//' | base64 -d > /tmp/fav.png
-            convert /tmp/fav.png -resize 1024x1024 resources/icon-only.png
-            convert /tmp/fav.png -resize 680x680 -background none -gravity center -extent 1024x1024 resources/icon-foreground.png
-            convert -size 1024x1024 xc:'#0a2a6b' resources/icon-background.png
-          fi
-          npx capacitor-assets generate --android || echo "::warning::Icône par défaut utilisée."
-          exit 0
+          set -e
+          SRC=/tmp/logo.png
+          grep -o 'rel="apple-touch-icon"[^>]*base64,[A-Za-z0-9+/=]*' www/index.html | head -1 | sed 's/.*base64,//' | base64 -d > "$SRC"
+          RES=android/app/src/main/res
+          for d in "mdpi 48 108" "hdpi 72 162" "xhdpi 96 216" "xxhdpi 144 324" "xxxhdpi 192 432"; do
+            set -- $d
+            D=$1; S=$2; F=$3
+            mkdir -p "$RES/mipmap-$D"
+            L=$((S*80/100)); C=$((S/2)); P=$((F*66/100))
+            convert -size ${S}x${S} xc:'#0a2a6b' \( "$SRC" -resize ${L}x${L} \) -gravity center -composite "$RES/mipmap-$D/ic_launcher.png"
+            convert -size ${S}x${S} xc:none -fill '#0a2a6b' -draw "circle $C,$C $C,0" \( "$SRC" -resize ${L}x${L} \) -gravity center -composite "$RES/mipmap-$D/ic_launcher_round.png"
+            convert -size ${F}x${F} xc:none \( "$SRC" -resize ${P}x${P} \) -gravity center -composite "$RES/mipmap-$D/ic_launcher_foreground.png"
+          done
+          mkdir -p "$RES/values" "$RES/mipmap-anydpi-v26"
+          printf '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#0A2A6B</color>\n</resources>\n' > "$RES/values/ic_launcher_background.xml"
+          for n in ic_launcher ic_launcher_round; do
+            printf '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/ic_launcher_background"/>\n    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n</adaptive-icon>\n' > "$RES/mipmap-anydpi-v26/$n.xml"
+          done
+          ls -la "$RES"/mipmap-xxxhdpi
 
       - name: Synchroniser
         run: npx cap sync android
@@ -341,8 +346,7 @@ jobs:
             "version": "1.0.0",
             "private": true,
             "scripts": {
-              "libs": "node scripts/copy-libs.js",
-              "icons": "capacitor-assets generate --android"
+              "libs": "node scripts/copy-libs.js"
             },
             "dependencies": {
               "@capacitor/android": "^6.2.0",
@@ -355,9 +359,6 @@ jobs:
               "jspdf-autotable": "3.8.2",
               "@capacitor/browser": "^6.0.3",
               "pdfjs-dist": "3.11.174"
-            },
-            "devDependencies": {
-              "@capacitor/assets": "^3.0.5"
             }
           }
           EOF
